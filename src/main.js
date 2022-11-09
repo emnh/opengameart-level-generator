@@ -103,8 +103,8 @@ const getTile = function(data, options, sx, sy) {
 
 const generateGraph = function(data, options) {
   const { backgroundColor, width, height, tileWidth, tileHeight } = options;
-  const xtiles = Math.ceil(width / tileWidth);
-  const ytiles = Math.ceil(height / tileHeight);
+  const xtiles = Math.floor(width / tileWidth);
+  const ytiles = Math.floor(height / tileHeight);
   
   const tiles = [];
   let tileIndex = 0;
@@ -113,23 +113,80 @@ const generateGraph = function(data, options) {
   const tileBordersTop = {};
   const tileBordersBottom = {};
 
-  const threshold = 5;
+  const threshold = 50;
+  const maxErrors = Math.min(tileWidth, tileHeight) * 0.5;
+  const backgroundThreshold = 0.5;
   // TODO: Should be different if width and height are different.
-  const sumThreshold = threshold * Math.max(tileWidth, tileHeight);
+  // const sumThreshold = threshold * Math.max(tileWidth, tileHeight) * 4;
+
+  // const bin = x => Math.ceil(x / threshold) * threshold;
 
   const keyFunc = x => {
-    const sum = x.reduce((a, b) => a + b, 0);
+    const sum =
+      x
+        // .map(bin)
+        .reduce((a, b) => a + b, 0) / x.length;
     // console.log("sum", sum);
-    return Math.round(sum / sumThreshold) * sumThreshold;
+    return Math.round(sum / threshold) * threshold;
     // return x.join(',');
   };
 
+  const isBackgroundColor = (r, g, b, a) => {
+    const re = r == backgroundColor[0];
+    const ge = g == backgroundColor[1];
+    const be = b == backgroundColor[2];
+    const ae = a == backgroundColor[3];
+    return re && ge && be && ae;
+  };
+
   const compareFunc = (a, b) => {
-    const c = 
-      a
-        .map((x, i) => x - b[i] <= threshold)
-        .reduce((a, b) => a && b, true);
-    return c;
+    let errorCount = 0;
+    for (let i = 0; i < a.length; i += 4) {
+      const [r1, g1, b1, a1] = a.slice(i, i + 4);
+      const [r2, g2, b2, a2] = b.slice(i, i + 4);
+      if (a1 == 0 && a2 == 0) {
+        continue;
+      }
+      if (isBackgroundColor(r1, g1, b1, a1) && isBackgroundColor(r2, g2, b2, a2)) {
+        continue;
+      }
+      // const d = Math.sqrt((r1 - r2) ** 2 + (g1 - g2) ** 2 + (b1 - b2) ** 2 + (a1 - a2) ** 2);
+      const d = Math.abs(r1 - r2) + Math.abs(g1 - g2) + Math.abs(b1 - b2) + Math.abs(a1 - a2);
+      if (d > threshold) {
+        errorCount++;
+      }
+    }
+    return errorCount < maxErrors;
+  };
+
+  const diffFunc = (a, b) => {
+    const ret = [];
+    for (let i = 0; i < a.length; i += 4) {
+      const [r1, g1, b1, a1] = a.slice(i, i + 4);
+      const [r2, g2, b2, a2] = b.slice(i, i + 4);
+      if (isBackgroundColor(r1, g1, b1, a1) && isBackgroundColor(r2, g2, b2, a2)) {
+        continue;
+      }
+      const d = Math.sqrt((r1 - r2) ** 2 + (g1 - g2) ** 2 + (b1 - b2) ** 2 + (a1 - a2) ** 2);
+      ret.push(d > threshold ? {
+        r: r1 - r2,
+        g: g1 - g2,
+        b: b1 - b2,
+        a: a1 - a2
+      } : 0);
+    }
+    return ret;
+  };
+
+  const isBackground = (a) => {
+    let backgroundCount = 0;
+    for (let i = 0; i < a.length; i += 4) {
+      const [r1, g1, b1, a1] = a.slice(i, i + 4);
+      if (isBackgroundColor(r1, g1, b1, a1)) {
+        backgroundCount++;
+      }
+    }
+    return backgroundCount >= backgroundThreshold * (a.length / 4);
   };
 
   for (let xtile = 0; xtile < xtiles; xtile++) {
@@ -147,25 +204,33 @@ const generateGraph = function(data, options) {
       const rightDiscriminator = keyFunc(right);
       const topDiscriminator = keyFunc(top);
       const bottomDiscriminator = keyFunc(bottom);
-      if (leftDiscriminator in tileBordersLeft) {
-        tileBordersLeft[leftDiscriminator].push(tileIndex);
-      } else {
-        tileBordersLeft[leftDiscriminator] = [tileIndex];
+      if (!isBackground(left)) {
+        if (leftDiscriminator in tileBordersLeft) {
+          tileBordersLeft[leftDiscriminator].push(tileIndex);
+        } else {
+          tileBordersLeft[leftDiscriminator] = [tileIndex];
+        }
       }
-      if (rightDiscriminator in tileBordersRight) {
-        tileBordersRight[rightDiscriminator].push(tileIndex);
-      } else {
-        tileBordersRight[rightDiscriminator] = [tileIndex];
+      if (!isBackground(right)) {
+        if (rightDiscriminator in tileBordersRight) {
+          tileBordersRight[rightDiscriminator].push(tileIndex);
+        } else {
+          tileBordersRight[rightDiscriminator] = [tileIndex];
+        }
       }
-      if (topDiscriminator in tileBordersTop) {
-        tileBordersTop[topDiscriminator].push(tileIndex);
-      } else {
-        tileBordersTop[topDiscriminator] = [tileIndex];
+      if (!isBackground(top)) {
+        if (topDiscriminator in tileBordersTop) {
+          tileBordersTop[topDiscriminator].push(tileIndex);
+        } else {
+          tileBordersTop[topDiscriminator] = [tileIndex];
+        }
       }
-      if (bottomDiscriminator in tileBordersBottom) {
-        tileBordersBottom[bottomDiscriminator].push(tileIndex);
-      } else {
-        tileBordersBottom[bottomDiscriminator] = [tileIndex];
+      if (!isBackground(bottom)) {
+        if (bottomDiscriminator in tileBordersBottom) {
+          tileBordersBottom[bottomDiscriminator].push(tileIndex);
+        } else {
+          tileBordersBottom[bottomDiscriminator] = [tileIndex];
+        }
       }
       options.logParent.appendChild(canvas);
     }
@@ -213,10 +278,6 @@ const generateGraph = function(data, options) {
         }
     ) : [];
 
-    // const rightMatches = rightDiscriminator in tileBordersLeft ? tileBordersLeft[rightDiscriminator].filter(f) : [];
-    // const topMatches = topDiscriminator in tileBordersBottom ? tileBordersBottom[topDiscriminator].filter(f) : [];
-    // const bottomMatches = bottomDiscriminator in tileBordersTop ? tileBordersTop[bottomDiscriminator].filter(f) : [];
-    
     let leftDiscriminatorIsBackgroundColor = true;
     for (let i = 0; i < left.length; i += 4) {
       const [r, g, b, a] = left.slice(i, i + 4);
@@ -249,10 +310,6 @@ const generateGraph = function(data, options) {
         break;
       }
     }
-    // const leftDiscriminatorIsBackgroundColor = false;
-    // const rightDiscriminatorIsBackgroundColor = false;
-    // const topDiscriminatorIsBackgroundColor = false;
-    // const bottomDiscriminatorIsBackgroundColor = false;
 
     if (leftDiscriminatorIsBackgroundColor) {
       tile.leftMatches = [];
@@ -324,12 +381,15 @@ const generateGraph = function(data, options) {
     }
   }
 
-  const d3width = 800;
-  const d3height = 800;
+  const scale = 1.1;
+  // const d3width = width * scale;
+  // const d3height = height * scale;
+  const d3width = 1000;
+  const d3height = 1000;
 
   const svg = d3.select(options.logParent).append('svg')
-      .attr('width', 800)
-      .attr('height', 800);
+      .attr('width', d3width)
+      .attr('height', d3height);
 
   const dx = tileWidth;
   const dy = tileHeight;
@@ -342,8 +402,6 @@ const generateGraph = function(data, options) {
       .force('center', d3.forceCenter(d3width / 2, d3height / 2))
       .force('x', d3.forceX(d3width / 2).strength(0.1))
       .force('y', d3.forceY(d3height / 2).strength(0.1));
-
-  const scale = 1.1;
 
   const node = svg.append('g')
       .attr('class', 'nodes')
@@ -359,14 +417,18 @@ const generateGraph = function(data, options) {
         const tile = tiles[d.id];
         const { x } = tile;
         return x * scale;
+        // return d.x * scale;
       })
       .attr('y', (d) => {
         const tile = tiles[d.id];
         const { y } = tile;
         return y * scale;
+        // return d.y * scale;
       })
       .attr('width', tileWidth)
-      .attr('height', tileHeight)
+      .attr('height', tileHeight);
+    
+    node
       .append('title')
         .text((d) => {
           const tile1 = tiles[d.id];
@@ -380,10 +442,11 @@ const generateGraph = function(data, options) {
           const { bottom } = discriminator2;
           const keys = [keyFunc(top), keyFunc(bottom)];
           const val = compareFunc(top, bottom);
+          const diff = diffFunc(top, bottom);
           
           const obj = {
             id: d.id, top: top.slice(0, k), bottom: bottom.slice(0, k),
-            keys, val
+            keys, val, diff
           };
           // const tile2 = tiles[d.id - 1];
 
@@ -427,19 +490,19 @@ const generateGraph = function(data, options) {
       // .attr('x2', (d) => d.target.x + tileWidth * scale / 2)
       // .attr('y2', (d) => d.target.y + tileHeight * scale / 2);
 
-  // simulation
-  //     .nodes(graph.nodes)
-  //     .on('tick', () => {
-  //       node
-  //           .attr('x', (d) => d.x - tileWidth / 2)
-  //           .attr('y', (d) => d.y - tileHeight / 2);
+  simulation
+      .nodes(graph.nodes)
+      .on('tick', () => {
+        node
+            .attr('x', (d) => d.x - tileWidth / 2)
+            .attr('y', (d) => d.y - tileHeight / 2);
         
-  //       link
-  //           .attr('x1', (d) => d.source.x)
-  //           .attr('y1', (d) => d.source.y)
-  //           .attr('x2', (d) => d.target.x)
-  //           .attr('y2', (d) => d.target.y);
-  //     });
+        link
+            .attr('x1', (d) => d.source.x)
+            .attr('y1', (d) => d.source.y)
+            .attr('x2', (d) => d.target.x)
+            .attr('y2', (d) => d.target.y);
+      });
 };
 
 const generateMap = function(img) {
