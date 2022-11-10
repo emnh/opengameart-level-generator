@@ -1,5 +1,8 @@
 import './style.css'
 import * as d3 from 'd3';
+import * as wfc from 'wavefunctioncollapse';
+import * as seedrandom from 'seedrandom';
+// const wfc = require('wavefunctioncollapse');
 
 const getBackgroundColor = function(data) {
   const histogram = {}
@@ -97,6 +100,7 @@ const getTile = function(data, options, sx, sy) {
   ctx.putImageData(imageData, 0, 0);
   return {
     canvas,
+    bitmap: pixels,
     discriminator
   };
 };
@@ -113,8 +117,8 @@ const generateGraph = function(data, options) {
   const tileBordersTop = {};
   const tileBordersBottom = {};
 
-  const threshold = 50;
-  const maxErrors = Math.min(tileWidth, tileHeight) * 0.5;
+  const threshold = 5;
+  const maxErrors = Math.min(tileWidth, tileHeight) * 0.25;
   const backgroundThreshold = 0.5;
   // TODO: Should be different if width and height are different.
   // const sumThreshold = threshold * Math.max(tileWidth, tileHeight) * 4;
@@ -178,13 +182,16 @@ const generateGraph = function(data, options) {
     return ret;
   };
 
-  const isBackground = (a) => {
+  const isBackground = (a, all = false) => {
     let backgroundCount = 0;
     for (let i = 0; i < a.length; i += 4) {
       const [r1, g1, b1, a1] = a.slice(i, i + 4);
       if (isBackgroundColor(r1, g1, b1, a1)) {
         backgroundCount++;
       }
+    }
+    if (all) {
+      return backgroundCount == a.length / 4;
     }
     return backgroundCount >= backgroundThreshold * (a.length / 4);
   };
@@ -195,6 +202,11 @@ const generateGraph = function(data, options) {
       const x = xtile * tileWidth;
       const y = ytile * tileHeight;
       const tile = getTile(data, options, x, y);
+
+      if (isBackground(tile.bitmap, true)) {
+        continue;
+      }
+
       tile.x = x;
       tile.y = y;
       const { canvas, discriminator } = tile;
@@ -358,6 +370,7 @@ const generateGraph = function(data, options) {
       };
       graph.links.push(link);
     }
+
     for (let rightMatch of rightMatches) {
       const link = {
         source: tileIndex,
@@ -503,6 +516,179 @@ const generateGraph = function(data, options) {
             .attr('x2', (d) => d.target.x)
             .attr('y2', (d) => d.target.y);
       });
+
+  return graph;
+};
+
+const getBiggestConnectedComponent = (graph) => {
+  const { nodes, links } = graph;
+  
+  const neighbours = {};
+  for (let node of nodes) {
+    neighbours[node.id] = [];
+  }
+  for (let link of links) {
+    const { source, target } = link;
+    const sourceID = source.id;
+    const targetID = target.id;
+    if (!(sourceID in neighbours)) {
+      neighbours[sourceID] = [];
+    }
+    if (!(targetID in neighbours)) {
+      neighbours[targetID] = [];
+    }
+    neighbours[sourceID].push(targetID);
+    neighbours[targetID].push(sourceID);
+  }
+
+  // console.log('neighbours', neighbours);
+
+  let max = 0;
+  let maxComponent = [];
+  for (let i = 0; i < nodes.length; i++) {
+    const visited = new Set();
+    const queue = [];
+    const component = [];
+    const startNode = nodes[i];
+    queue.push(startNode);
+    visited.add(startNode.id);
+    while (queue.length > 0) {
+      const top = queue.shift();
+      component.push(top);
+      if (component.length > max) {
+        max = component.length;
+        maxComponent = component;
+      }
+
+      for (let nb of neighbours[top.id]) {
+        if (!visited.has(nb)) {
+          visited.add(nb);
+          queue.push(nodes[nb]);
+        }
+      }
+    }
+  }
+  
+  console.log("max", max);
+  return maxComponent;
+};
+
+const generateMapHelper = function(graph, options, xtiles, ytiles) {
+  const { width, height, tileWidth, tileHeight } = options;
+  const mapWidth = xtiles * tileWidth;
+  const mapHeight = ytiles * tileHeight;
+
+  const data = {
+    unique: false,
+    tilesize: tileWidth,
+    tiles: [],
+    neighbors: []
+  };
+
+  const prefix = 'tile';
+  const validNodes = {};
+
+  const nodes = getBiggestConnectedComponent(graph);
+
+  // Add tiles from graph to data
+  for (let i = 0; i < nodes.length; i++) {
+    const node = nodes[i];
+    const tile = {
+      name: prefix + i.toString(),
+      bitmap: node.tile.bitmap, //[0, 1, 2, 3, 4, 5, 6, 7].map(x => node.tile.bitmap),
+      symmetry: ''
+    };
+    // console.log(tile.bitmap);
+    
+    const { leftMatches, rightMatches, topMatches, bottomMatches } = node.tile;
+    const totalMatchCount =
+      leftMatches.length + rightMatches.length + topMatches.length + bottomMatches.length;
+    if (totalMatchCount < 3) {
+      // continue;
+    }
+
+    validNodes[i] = true;
+    data.tiles.push(tile);
+  }
+  for (let i = 0; i < graph.nodes.length; i++) {
+    const node = graph.nodes[i];
+    if (!(i in validNodes)) {
+      continue;
+    }
+    const { leftMatches, rightMatches, topMatches, bottomMatches } = node.tile;
+    for (let j = 0; j < leftMatches.length; j++) {
+      const match = leftMatches[j];
+      const left = prefix + i.toString() + ' 1'; // 1 = left
+      const right = prefix + match.toString() + ' 3'; // 3 = right
+      if (match in validNodes) {
+        const n = { left, right };
+        data.neighbors.push(n);
+      }
+    }
+    for (let j = 0; j < rightMatches.length; j++) {
+      const match = rightMatches[j];
+      const left = prefix + i.toString() + ' 3'; // 3 = right
+      const right = prefix + match.toString() + ' 1'; // 1 = left
+      if (match in validNodes) {
+        const n = { left, right };
+        data.neighbors.push(n);
+      }
+    }
+    for (let j = 0; j < topMatches.length; j++) {
+      const match = topMatches[j];
+      const left = prefix + i.toString() + ' 0'; // 0 = top
+      const right = prefix + match.toString() + ' 2'; // 2 = bottom
+      if (match in validNodes) {
+        const n = { left, right };
+        data.neighbors.push(n);
+      }
+    }
+    for (let j = 0; j < bottomMatches.length; j++) {
+      const match = bottomMatches[j];
+      const left = prefix + i.toString() + ' 2'; // 2 = bottom
+      const right = prefix + match.toString() + ' 0'; // 0 = top
+      const n = { left, right };
+      if (match in validNodes) {
+        data.neighbors.push(n);
+      }
+    }
+
+    
+  }
+
+  // Add neighbours from graph to data
+  // for (let i = 0; i < graph.links.length; i++) {
+  //   const neighbor = graph.links[i];
+  //   const { source, target } = neighbor;
+  //   const n = {
+  //     left: source.id.toString(),
+  //     right: target.id.toString()
+  //   };
+  //   data.neighbors.push(n);
+  // }
+
+  const model = new wfc.SimpleTiledModel(data, null, xtiles, ytiles, false);
+
+  for (let i = 0; i < 1000; i++) {
+    const rng = seedrandom();
+    const success = model.generate(rng);
+    if (success) {
+      console.log('success', success);
+      break;
+    }
+  }
+
+  const canvas = document.createElement('canvas');
+  options.logParent.appendChild(canvas);
+  canvas.width = mapWidth;
+  canvas.height = mapHeight;
+  const ctx = canvas.getContext('2d');
+  const imgData = ctx.createImageData(xtiles * tileWidth, ytiles * tileHeight);
+  // Use an opaque blue as the default color
+  model.graphics(imgData.data, [0, 0, 255, 255]);
+  // console.log(a.filter(x => x !== 0).length);
+  // console.log(model.observed);
+  ctx.putImageData(imgData, 0, 0);
 };
 
 const generateMap = function(img) {
@@ -528,7 +714,8 @@ const generateMap = function(img) {
     tileHeight: 32,
     logParent: div
   };
-  generateGraph(data, options);
+  const graph = generateGraph(data, options);
+  generateMapHelper(graph, options, 20, 20);
 
   // for (let i = 0; i < data.length; i += 4) {
   //   data[i] = 255 - data[i];
